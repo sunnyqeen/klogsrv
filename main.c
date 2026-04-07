@@ -148,7 +148,7 @@ serve_file_accept_connection(const char *path, const char *logfile_path, int ser
           close(logfile_fd);
           logfile_fd = -1;
         }
-        if (ftell(logfile_fd) > 1024*1024) {
+        if (lseek(logfile_fd, 0, SEEK_CUR) > 1024*1024) {
           ftruncate(logfile_fd, 0);
         }
       }
