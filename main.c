@@ -41,21 +41,21 @@ along with this program; see the file COPYING. If not, see
 #endif
 
 
-#define LOG_PUTS(s) {				\
-    puts(s);					\
-    klog_puts(s);				\
+#define LOG_PUTS(s) {               \
+    puts(s);                    \
+    klog_puts(s);               \
   }
 
-#define LOG_PRINTF(s, ...) {				\
-    fprintf(stdout, s, __VA_ARGS__);			\
-    klog_printf(s, __VA_ARGS__);			\
+#define LOG_PRINTF(s, ...) {                \
+    fprintf(stdout, s, __VA_ARGS__);            \
+    klog_printf(s, __VA_ARGS__);            \
   }
 
-#define LOG_PERROR(s) {					  \
+#define LOG_PERROR(s) {                   \
     fprintf(stderr, "%s:%d:%s: %s\n", __FILE__, __LINE__, \
-	    s, strerror(errno));			  \
-    klog_printf("%s:%d:%s: %s\n", __FILE__, __LINE__,	  \
-		s, strerror(errno));			  \
+        s, strerror(errno));              \
+    klog_printf("%s:%d:%s: %s\n", __FILE__, __LINE__,     \
+        s, strerror(errno));              \
 }
 
 
@@ -83,7 +83,7 @@ notify(const char *fmt, ...) {
 
 
 static int
-serve_file_while_connected(const char *path, int server_fd) {
+serve_file_accept_connection(const char *path, const char *logfile_path, int server_fd) {
   struct timeval timeout;
   size_t nb_connections;
   fd_set output_set;
@@ -93,12 +93,15 @@ serve_file_while_connected(const char *path, int server_fd) {
   char buf[255];
   ssize_t len;
   int file_fd;
+  int logfile_fd;
   int err = 0;
 
   if((file_fd=open(path, O_RDONLY)) < 0) {
     LOG_PERROR("open");
     return -1;
   }
+
+  logfile_fd=open(logfile_path,  O_WRONLY | O_APPEND | O_CREAT);
 
   FD_ZERO(&input_set);
   FD_ZERO(&output_set);
@@ -107,7 +110,7 @@ serve_file_while_connected(const char *path, int server_fd) {
   FD_SET(file_fd, &input_set);
 
   timeout.tv_sec = 0;
-  timeout.tv_usec = 1000*10; //10ms
+  timeout.tv_usec = 1000*100; //100ms
   nb_connections = 0;
 
   do {
@@ -124,9 +127,9 @@ serve_file_while_connected(const char *path, int server_fd) {
     // new connection
     if(FD_ISSET(server_fd, &temp_set)) {
       if((client_fd=accept(server_fd, NULL, NULL)) < 0) {
-	LOG_PERROR("accept");
-	err = -1;
-	break;
+        LOG_PERROR("accept");
+        err = -1;
+        break;
       }
       FD_SET(client_fd, &output_set);
       nb_connections++;
@@ -135,22 +138,29 @@ serve_file_while_connected(const char *path, int server_fd) {
     // new data from file
     if(FD_ISSET(file_fd, &temp_set)) {
       if((len=read(file_fd, buf, sizeof(buf))) < 1) {
-	LOG_PERROR("read");
-	err = -1;
-	break;
+        LOG_PERROR("read");
+        err = -1;
+        break;
       }
 
-      for(client_fd=0; client_fd<FD_SETSIZE; client_fd++) {
-	if(FD_ISSET(client_fd, &output_set)) {
-	  if(write(client_fd, buf, len) != len) {
-	    FD_CLR(client_fd, &output_set);
-	    close(client_fd);
-	    nb_connections--;
-	  }
-	}
+      if (logfile_fd > 0) {
+        if (write(logfile_fd, buf, len) != len){
+          close(logfile_fd);
+          logfile_fd = -1;
+        }
+      }
+
+      for(client_fd=0; nb_connections > 0 && client_fd<FD_SETSIZE; client_fd++) {
+        if(FD_ISSET(client_fd, &output_set)) {
+          if(write(client_fd, buf, len) != len) {
+            FD_CLR(client_fd, &output_set);
+            close(client_fd);
+            nb_connections--;
+          }
+        }
       }
     }
-  } while(nb_connections > 0);
+  } while(1);
 
   for(client_fd=0; client_fd<FD_SETSIZE; client_fd++) {
     if(FD_ISSET(client_fd, &output_set)) {
@@ -159,12 +169,14 @@ serve_file_while_connected(const char *path, int server_fd) {
     }
   }
   close(file_fd);
-
+  if (logfile_fd > 0) {
+    close(logfile_fd);
+  }
   return err;
 }
 
 static int
-serve_file(const char *path, uint16_t port, int notify_user) {
+serve_file(const char *path, const char *logfile_path, uint16_t port, int notify_user) {
   char ip[INET_ADDRSTRLEN];
   struct ifaddrs *ifaddr;
   struct sockaddr_in sin;
@@ -241,20 +253,9 @@ serve_file(const char *path, uint16_t port, int notify_user) {
   }
 
   while(1) {
-    // wait for a connection
-    FD_ZERO(&set);
-    FD_SET(sockfd, &set);
-    if(select(sockfd+1, &set, NULL, NULL, NULL) < 0) {
-      LOG_PERROR("select");
-      close(sockfd);
-      return -1;
-    }
-
-    // someone wants to connect
-    if(FD_ISSET(sockfd, &set)) {
-      if(serve_file_while_connected(path, sockfd) < 0) {
-	close(sockfd);
-	return -1;
+      if(serve_file_accept_connection(path, logfile_path, sockfd) < 0) {
+        close(sockfd);
+        return -1;
       }
     }
   }
@@ -336,7 +337,7 @@ main() {
   }
 
   while(1) {
-    serve_file("/dev/klog", port, notify_user);
+    serve_file("/dev/klog", "/mnt/klog.txt", port, notify_user);
     notify_user = 0;
     sleep(3);
   }
