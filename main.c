@@ -82,6 +82,84 @@ notify(const char *fmt, ...) {
 }
 
 
+#define KLOG_MAX_BYTES (1024 * 1024)
+
+/**
+ * Allocate logpath + ".bak" (e.g. /mnt/klog.txt -> /mnt/klog.txt.bak).
+ * Caller must free(). Returns NULL on allocation failure.
+ */
+static char *
+bakpath_from_logpath(const char *logpath) {
+  size_t loglen = strlen(logpath);
+  size_t need = loglen + 5; /* ".bak" + NUL */
+  char *dst = malloc(need);
+
+  if (dst == NULL) {
+    return NULL;
+  }
+
+  snprintf(dst, need, "%s.bak", logpath);
+  return dst;
+}
+
+/**
+ * Copy the current log to *.bak from logfile_fd, then always truncate in place.
+ * If the backup step fails, the log is still truncated so size does not grow without bound.
+ * Requires logfile_fd opened with O_RDWR (read for copy; O_APPEND still applies to writes).
+ * Returns 0 if backup and ftruncate both succeeded, -1 if either failed (ftruncate is still attempted).
+ */
+static int
+backup_logfile_to_bak(const char *logfile_path, int logfile_fd) {
+  char cbuf[8192];
+  int bak_fd;
+  ssize_t n;
+  int backup_err = 0;
+  char *bakpath = NULL;
+
+  if (logfile_fd < 0) {
+    return 0;
+  }
+
+  if (logfile_path != NULL) {
+    bakpath = bakpath_from_logpath(logfile_path);
+    if (bakpath == NULL) {
+      LOG_PERROR("malloc");
+      backup_err = -1;
+    } else if (lseek(logfile_fd, 0, SEEK_SET) == (off_t)-1) {
+      LOG_PERROR("lseek");
+      backup_err = -1;
+    } else {
+      bak_fd = open(bakpath, O_WRONLY | O_TRUNC | O_CREAT, 0644);
+      if (bak_fd < 0) {
+        LOG_PERROR("open");
+        backup_err = -1;
+      } else {
+        while ((n = read(logfile_fd, cbuf, sizeof cbuf)) > 0) {
+          if (write(bak_fd, cbuf, n) != n) {
+            LOG_PERROR("write");
+            backup_err = -1;
+            break;
+          }
+        }
+        if (n < 0) {
+          LOG_PERROR("read");
+          backup_err = -1;
+        }
+        close(bak_fd);
+      }
+    }
+    free(bakpath);
+  }
+
+  if (ftruncate(logfile_fd, 0) < 0) {
+    LOG_PERROR("ftruncate");
+    return -1;
+  }
+
+  return backup_err;
+}
+
+
 static int
 serve_file_accept_connection(const char *path, const char *logfile_path, int server_fd) {
   struct timeval timeout;
@@ -101,7 +179,7 @@ serve_file_accept_connection(const char *path, const char *logfile_path, int ser
     return -1;
   }
 
-  logfile_fd=open(logfile_path, O_WRONLY|O_APPEND|O_CREAT, 0644);
+  logfile_fd=open(logfile_path, O_RDWR|O_APPEND|O_CREAT, 0644);
 
   FD_ZERO(&input_set);
   FD_ZERO(&output_set);
@@ -143,13 +221,14 @@ serve_file_accept_connection(const char *path, const char *logfile_path, int ser
         break;
       }
 
-      if (logfile_fd > 0) {
-        if (write(logfile_fd, buf, len) != len){
+      if (logfile_fd >= 0) {
+        off_t sz = lseek(logfile_fd, 0, SEEK_END);
+        if (sz != (off_t)-1 && sz + len > KLOG_MAX_BYTES) {
+          (void)backup_logfile_to_bak(logfile_path, logfile_fd);
+        }
+        if (write(logfile_fd, buf, len) != len) {
           close(logfile_fd);
           logfile_fd = -1;
-        }
-        if (lseek(logfile_fd, 0, SEEK_CUR) > 1024*1024) {
-          ftruncate(logfile_fd, 0);
         }
       }
 
@@ -172,7 +251,7 @@ serve_file_accept_connection(const char *path, const char *logfile_path, int ser
     }
   }
   close(file_fd);
-  if (logfile_fd > 0) {
+  if (logfile_fd >= 0) {
     close(logfile_fd);
   }
   return err;
@@ -266,7 +345,7 @@ serve_file(const char *path, const char *logfile_path, uint16_t port, int notify
 
 
 /**
- * Fint the pid of a process with the given name.
+ * Find the pid of a process with the given name.
  **/
 static pid_t
 find_pid(const char* name) {
