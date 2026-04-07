@@ -181,7 +181,6 @@ serve_file(const char *path, const char *logfile_path, uint16_t port, int notify
   struct ifaddrs *ifaddr;
   struct sockaddr_in sin;
   int ifaddr_wait = 1;
-  fd_set set;
   int sockfd;
 
   if(getifaddrs(&ifaddr) == -1) {
@@ -253,10 +252,9 @@ serve_file(const char *path, const char *logfile_path, uint16_t port, int notify
   }
 
   while(1) {
-      if(serve_file_accept_connection(path, logfile_path, sockfd) < 0) {
-        close(sockfd);
-        return -1;
-      }
+    if(serve_file_accept_connection(path, logfile_path, sockfd) < 0) {
+      close(sockfd);
+      return -1;
     }
   }
 
