@@ -41,13 +41,13 @@ along with this program; see the file COPYING. If not, see
 #endif
 
 
-#define LOG_PUTS(s) {               \
+#define LOG_PUTS(s) {           \
     puts(s);                    \
     klog_puts(s);               \
   }
 
 #define LOG_PRINTF(s, ...) {                \
-    fprintf(stdout, s, __VA_ARGS__);            \
+    fprintf(stdout, s, __VA_ARGS__);        \
     klog_printf(s, __VA_ARGS__);            \
   }
 
@@ -101,7 +101,7 @@ serve_file_accept_connection(const char *path, const char *logfile_path, int ser
     return -1;
   }
 
-  logfile_fd=open(logfile_path,  O_WRONLY | O_APPEND | O_CREAT);
+  logfile_fd=open(logfile_path, O_WRONLY|O_APPEND|O_CREAT);
 
   FD_ZERO(&input_set);
   FD_ZERO(&output_set);
