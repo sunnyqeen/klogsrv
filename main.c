@@ -101,7 +101,7 @@ serve_file_accept_connection(const char *path, const char *logfile_path, int ser
     return -1;
   }
 
-  logfile_fd=open(logfile_path, O_WRONLY|O_APPEND|O_CREAT);
+  logfile_fd=open(logfile_path, O_WRONLY|O_APPEND|O_CREAT, 0644);
 
   FD_ZERO(&input_set);
   FD_ZERO(&output_set);
@@ -147,6 +147,9 @@ serve_file_accept_connection(const char *path, const char *logfile_path, int ser
         if (write(logfile_fd, buf, len) != len){
           close(logfile_fd);
           logfile_fd = -1;
+        }
+        if (ftell(logfile_fd) > 1024*1024) {
+          ftruncate(logfile_fd, 0);
         }
       }
 
